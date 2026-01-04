@@ -1,0 +1,10 @@
+[package]
+name = "mousebrilliant/benchmark"
+version = "0.1.0"
+registry = "https://github.com/UpliftGames/wally-index"
+realm = "shared"
+
+[dependencies]
+bytenet = "ffrostflame/bytenet@0.4.6"
+rednet = "uncontained0/red@^1.0.0"
+warp = "imezx/warp@1.0.13"
