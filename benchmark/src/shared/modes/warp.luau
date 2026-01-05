@@ -42,7 +42,9 @@ else
 		[Data:WaitForChild("fps-hitreg")]     = function(data) r0:Fire(true,data) end,
 		[Data:WaitForChild("input-stream")]   = function(data) r1:Fire(true,data) end,
 		[Data:WaitForChild("save-file-load")] = function(data) r2:Fire(true,data) end,
-		[Data:WaitForChild("voxel-chunk")]    = function(data) r3:Fire(true,data) end,
+		[Data:WaitForChild("voxel-chunk")]    = function(data) 
+            --// warp does not support buffers?!?
+            r3:Fire(true,buffer.tostring(data)) 
+        end,
 	}
-
 end

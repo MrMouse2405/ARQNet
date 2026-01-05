@@ -176,7 +176,8 @@ function Graph.new(Frame)
 		
 		-- Mark our Y axis values along the derived range
 		
-		for y=0,1,0.2 do
+		--points!!
+		for y=0,1,0.1 do
 			local Marker = Instance.new("TextLabel")
 			Marker.Name = y
 			Marker.Size = UDim2.new(1,0,0.08,0)

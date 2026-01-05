@@ -7,16 +7,21 @@ local GraphModule = require('@self/graph')
 
 -- Load Modes
 local Shared = game:GetService('ReplicatedStorage'):WaitForChild('Shared')
-local RobloxMode = require(Shared:WaitForChild("modes"):WaitForChild("roblox"))
-local ByteNetMode = require(Shared:WaitForChild("modes"):WaitForChild("bytenet"))
-local RedNetMode = require(Shared:WaitForChild('modes'):WaitForChild('rednet'))
-local WarpMode = require(Shared:WaitForChild('modes'):WaitForChild('warp'))
+local Modes = Shared:WaitForChild("modes")
+local RobloxMode = require(Modes:WaitForChild("roblox"))
+local ByteNetMode = require(Modes:WaitForChild("bytenet"))
+local RedNetMode = require(Modes:WaitForChild('rednet'))
+local WarpMode = require(Modes:WaitForChild('warp'))
+local ZapMode = require(Modes:WaitForChild('zap'))
+local BlinkMode = require(Modes:WaitForChild('blink'))
 
 local MODES = {
 	{ Name = "Roblox", Module = RobloxMode },
 	{ Name = "ByteNet", Module = ByteNetMode },
 	{ Name = "RedNet", Module = RedNetMode },
 	{ Name = "Warp", Module = WarpMode },
+	{ Name = "Zap", Module = ZapMode },
+	{ Name = "Blink", Module = BlinkMode}
 }
 
 -- Setup Environment
@@ -47,7 +52,7 @@ ListLayout.Padding = UDim.new(0, 10)
 ListLayout.Parent = ScrollFrame
 
 local BATCH_SIZES = {}
-for i = 10, 50, 10 do
+for i = 10, 100, 10 do
 	table.insert(BATCH_SIZES, i)
 end
 

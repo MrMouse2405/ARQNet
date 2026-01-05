@@ -35,15 +35,13 @@ function Benchmark.Run(Label: string, Generator: () -> any, Method: (any) -> (),
 	local StartTime = os.clock()
 	local Connection
 	
+	for _ = 1, BatchSize do
+		SentCount += 1
+		Method(Data)
+	end
 	Connection = RunService.PostSimulation:Connect(function(DeltaTime)
 		table.insert(BandwidthHistory, Stats.DataSendKbps)
-		table.insert(FramerateHistory, 1 / DeltaTime)
-		
-		for _ = 1, BatchSize do
-			SentCount += 1
-			Method(Data)
-		end
-		
+		table.insert(FramerateHistory, 1 / DeltaTime)	
 		if os.clock() - StartTime > 2 then
 			Connection:Disconnect()
 		end
