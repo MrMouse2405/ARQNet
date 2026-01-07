@@ -117,13 +117,13 @@ task.spawn(function()
 		
 		local bandwidthGraphFrame, bandwidthXAxis = createGraphContainer(dataName .. " - Bandwidth (KBps)")
 		local bandwidthGraph = GraphModule.new(bandwidthGraphFrame)
-		bandwidthGraph.Resolution = 10
 		-- bandwidthGraph.BaselineZero = true
 
+		local bandwidthGraphFrame2, bandwidthXAxis2 = createGraphContainer(dataName .. " - Bandwidth (Zap/Blink) (KBps)")
+		local bandwidthGraph2 = GraphModule.new(bandwidthGraphFrame2)		
 
 		local fpsGraphFrame, fpsXAxis = createGraphContainer(dataName .. " - FPS (Hz)")
 		local fpsGraph = GraphModule.new(fpsGraphFrame)
-		fpsGraph.Resolution = 10
 		fpsGraph.BaselineZero = true
         
 		local results = {}
@@ -146,17 +146,23 @@ task.spawn(function()
 			end
 			
 			-- Update graph live
-			local bandwidthData, fpsData = {}, {}
+			local bandwidthData, bandwidthData2, fpsData = {}, {}, {}
 			for name, data in pairs(results) do
 				if #data.Bandwidth > 0 then
-					bandwidthData[name] = data.Bandwidth
+					if name == "Roblox" or name == "RedNet" or name == 'Warp' then
+						bandwidthData[name] = data.Bandwidth
+					else
+						bandwidthData2[name] = data.Bandwidth
+					end
 					fpsData[name] = data.FPS
 				end
 			end
 			
 			bandwidthGraph.Data = bandwidthData
+			bandwidthGraph2.Data = bandwidthData2
 			fpsGraph.Data = fpsData
 			updateXLabels(bandwidthXAxis, currentLabels)
+			updateXLabels(bandwidthXAxis2, currentLabels)
 			updateXLabels(fpsXAxis, currentLabels)
 
 			task.wait()

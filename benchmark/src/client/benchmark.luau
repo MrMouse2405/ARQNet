@@ -39,6 +39,7 @@ function Benchmark.Run(Label: string, Generator: () -> any, Method: (any) -> (),
 		SentCount += 1
 		Method(Data)
 	end
+
 	Connection = RunService.PostSimulation:Connect(function(DeltaTime)
 		table.insert(BandwidthHistory, Stats.DataSendKbps)
 		table.insert(FramerateHistory, 1 / DeltaTime)	
