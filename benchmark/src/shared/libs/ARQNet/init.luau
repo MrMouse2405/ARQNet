@@ -46,7 +46,8 @@ __/        \__/        \__/        \__/        \__/        \__/
 ]]
 export type ARQNet = {
 	send: (payload: buffer)->(),
-	recieve: ((payload: buffer)->()) -> ()
+	recieve: ((payload: buffer)->()) -> (),
+	get_ping: () -> number,
 }
 
 local ARQNet = {}
@@ -89,6 +90,10 @@ if RunService:IsServer() then
 	ARQNet.recieve = function(callback : (payload: buffer)->())
 		table.insert(Listeners,callback)
 	end
+	ARQNet.get_ping = function()
+		print('[RTO]',arq.rto)
+		return math.round(arq.smoothed_rtt)
+	end
 else
 	local Listeners = {}
 	local function tx(packet: buffer)
@@ -112,6 +117,10 @@ else
 	end
 	ARQNet.recieve = function(callback : (payload: buffer)->())
 		table.insert(Listeners,callback)
+	end
+	ARQNet.get_ping = function()
+		print('[RTO]',arq.rto)
+		return arq.smoothed_rtt
 	end
 end
 

@@ -56,7 +56,7 @@ Only modify if you understand the implications on network behavior.
 ]]
 
 local MAXIMUM_SEGMENT_SIZE = 800
-local RETRANSMISSION_TIMEOUT = 1.0 -- Seconds (Simple fixed RTO)
+local RETRANSMISSION_TIMEOUT = 1000 -- ms (Simple fixed RTO)
 
 
 
@@ -89,10 +89,11 @@ do
 end
 
 
-local PairingHeap = require('./pairing_heap')
-local Segment = require('./segment')
-local encode_packet = Segment.encode_packet
-local decode_packet = Segment.decode_packet
+local segment = require('./segment')
+local signature = require('./signature')
+local encode_packet = segment.encode_packet
+local decode_packet = segment.decode_packet
+local sign = signature.sign
 
 
 --[[
@@ -107,7 +108,7 @@ local decode_packet = Segment.decode_packet
         A new ARQStateMachine instance.
 
 ]]
-local function makeARQ(tx: (packet : Packet)->(), rx: (payload: Payload)->()) : ARQStateMachine 
+local function makeARQ(tx: (packet : Packet)->(), rx: (id: number, payload: Payload)->()) : ARQStateMachine 
 	return {
 		tx_payload_queue = {},
 		tx_inflight = {},
@@ -117,6 +118,10 @@ local function makeARQ(tx: (packet : Packet)->(), rx: (payload: Payload)->()) : 
 
 		tx_nxt_sn = 0,
 		rx_nxt_sn = 0,
+
+		rtt_variance = 0,
+		smoothed_rtt = 0,
+		rto = RETRANSMISSION_TIMEOUT,
 
 		tx = tx,
 		rx = rx,
@@ -135,8 +140,8 @@ end
         payload: The raw data buffer to send.
 
 ]]
-local function transmit(arq : types.ARQStateMachine, payload: types.Payload)
-	table.insert(arq.tx_payload_queue,payload)
+local function transmit(arq : types.ARQStateMachine, id: string, payload: types.Payload)
+	table.insert(arq.tx_payload_queue,{id=id,payload=payload})
 end
 
 --[[
@@ -152,73 +157,66 @@ end
 ]]
 local function recieve(arq: types.ARQStateMachine)
 	for _,segment : Segment in ipairs(arq.rx_segment_queue) do
-		arq.rx(segment.payload)
+		arq.rx(segment.conversation_id,segment.payload)
 	end
 	table.clear(arq.rx_segment_queue)
 end
 
 --[[
-
     The main transmission loop (Heartbeat).
-
-    1. Assigns sequence numbers to queued payloads.
-    2. Wraps payloads in segments and transmits them.
-    3. Manages the retransmission timer for in-flight packets.
-
-    Params:
-        arq: The ARQ state machine.
-
 ]]
+local MAX_RTO = types.MAX_RTO
 local function process_tx(arq: ARQStateMachine)
-	local now : ms = math.floor(workspace:GetServerTimeNow() * 1000)
-	local sequence_number = arq.tx_nxt_sn
-	for _, payload : Payload in ipairs(arq.tx_payload_queue) do
-		--[[
-		
-			1. Move from queue (Assign Sequence Numbers)
-		
-		]]
-		local segment : Segment = {
-			conversation_id = 0,
-			command = COMMAND_PUSH,
-			sequence_number = sequence_number,
-			timestamp = now,
-			payload = payload
-		}
-		--[[ 
-		
-			2. TX: Send new segments (Move to In-Flight)
-	    
-			In a real sliding window, we would check window size here before sending
-		
-		]]
-		local packet = encode_packet(segment)
+    local now = os.clock() 
+    local sequence_number = arq.tx_nxt_sn
+    
+    -- 1. PROCESS NEW PAYLOADS
+    for _, awaiting : {id: number, payload: Payload} in ipairs(arq.tx_payload_queue) do       
+        local segment : Segment = {
+            conversation_id = awaiting.id,
+            command = COMMAND_PUSH,
+            sequence_number = sequence_number,
+            timestamp = now,
+            payload = awaiting.payload, 
+        }
+
+        local packet = encode_packet(segment)
         local inflight : InFlightPacket = {
             segment = segment,
             packet = packet,
             first_sent_time = now,
-            last_sent_time = now
-        }
+            last_sent_time = now,
+            retransmission_count = 0,
+            current_rto = arq.rto 
+        }        
         arq.tx_inflight[sequence_number] = inflight
-		arq.tx(packet)
-		sequence_number += 1
-	end
-	arq.tx_nxt_sn = sequence_number
-	table.clear(arq.tx_payload_queue)
-	--[[
-	
-		3. Retransmission Logic (Check In-Flight Queue)
+        arq.tx(packet)
+        sequence_number += 1
+    end
     
-	]]
-	for _, inflight in arq.tx_inflight do
-        if now - inflight.last_sent_time > RETRANSMISSION_TIMEOUT then
-            -- Timeout detected! Resend.
+    arq.tx_nxt_sn = sequence_number
+    table.clear(arq.tx_payload_queue)
+
+    -- RETRANSMISSION LOGIC
+    for _, inflight in arq.tx_inflight do
+        if now - inflight.last_sent_time > inflight.current_rto then
+            
+            -- Timeout detected! 
+            
+            -- Update Stats for Karn's Algorithm
+            -- We increment this so calculate_rtt() will IGNORE the future ACK for this packet.
+            inflight.retransmission_count += 1
+            -- 1.5x Backoff Strategy
+            -- If it failed once, wait 1.5x longer next time.
+            -- (Standard TCP is 2x, but games need to be more aggressive)
+            inflight.current_rto = math.min(inflight.current_rto * 1.5, MAX_RTO)
+
+            -- Resend
             inflight.last_sent_time = now
             arq.tx(inflight.packet)
         end
     end
 end
-
 --[[
 
     Processes an incoming raw packet from the network.
@@ -241,11 +239,29 @@ local function process_rx(arq: ARQStateMachine, packet: Packet)
 	end
 end
 
-
-return {
-    makeARQ = makeARQ,
-    transmit = transmit,
-    recieve = recieve,
-    process_tx = process_tx,
-    process_rx = process_rx,
+export type ARQ = {
+    makeARQ    : (tx: (packet : Packet)->(), rx: (id: number, payload: Payload)->()) -> ARQ,
+    transmit   : (self: ARQ, id: number, payload: buffer)->(),
+    recieve    : (self : ARQ)->(),
+    process_tx : (self: ARQ)->(),
+    process_rx : (self : ARQ, packet: Packet)->(),
+    getSRTT    : (self: ARQ) -> ms,
 }
+
+type ARQPrivate = types.ARQStateMachine & ARQ;
+
+local ARQ = {}
+ARQ.__index = ARQ
+
+function ARQ.makeARQ(tx: (packet : Packet)->(), rx: (id: number, payload: Payload)->())
+    return setmetatable(makeARQ(tx, rx), ARQ)
+end
+ARQ.transmit = transmit
+ARQ.recieve = recieve
+ARQ.process_tx = process_tx
+ARQ.process_rx = process_rx
+function ARQ.getSRTT(self: types.ARQStateMachine):ms
+    return self.smoothed_rtt
+end
+
+return ARQ

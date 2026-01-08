@@ -75,7 +75,9 @@ export type InFlightPacket = {
     segment: Segment,
     packet: Packet,
     first_sent_time: number,
-    last_sent_time: number
+    last_sent_time: number,
+	current_rto: number,
+	retransmission_count: number
 }
 
 
@@ -91,11 +93,32 @@ export type ARQStateMachine = {
 	rx_segment_queue: List<Segment>, -- Ready for user to read
 	rx_out_of_order: Map<SequenceNumber,Segment>,   -- Recieved, waiting to be ordered
 	
+	-- sliding window state
 	tx_nxt_sn: uint32,
 	rx_nxt_sn: uint32,
 
+	-- round trip time calculations
+	smoothed_rtt : number,
+	rtt_variance : number,
+	rto: number,
+
+	-- callbacks
 	tx : (packet: Packet)->(),
 	rx : (payload : Payload)->()
 }
 
-return {}
+--[[
+
+	Configs
+
+]]
+
+local INTERVAL : ms = 10 -- Granularity (approx 100hz tick)
+local MIN_RTO : ms = 50 -- KCP default: 30-50ms (don't go lower than ~3 frames)
+local MAX_RTO : ms = 5000 -- Fail fast cap
+
+return {
+	INTERVAL = INTERVAL,
+	MIN_RTO = MIN_RTO,
+	MAX_RTO = MAX_RTO
+}

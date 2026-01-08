@@ -53,7 +53,7 @@ __/        \__/        \__/        \__/        \__/        \__/
 export type uint32 = number
 export type Payload = buffer
 export type Packet = buffer
-export type ms = uint32
+export type ms = number
 export type Command = number
 type List<T> = {T}
 
@@ -75,24 +75,24 @@ export type InFlightPacket = {
 
 @native 
 local function encode_packet(segment: Segment) : Packet
-	local b = buffer.create(4 + 1 + 4 + 4 + buffer.len(segment.payload))
+	local b = buffer.create(4 + 1 + 4 + 8 + buffer.len(segment.payload))
 	buffer.writeu32(b, 0, segment.conversation_id)
 	buffer.writeu8(b, 4, segment.command)
 	buffer.writeu32(b, 5, segment.sequence_number)
-	buffer.writeu32(b, 9, segment.timestamp)
-	buffer.copy(b, 13, segment.payload)
+	buffer.writef64(b, 9, segment.timestamp)
+	buffer.copy(b, 17, segment.payload)
 	return b
 end
 
 @native 
 local function decode_packet(packet : Packet) : Segment
-	local payload = buffer.create(buffer.len(packet) - 13)
-	buffer.copy(payload, 0, packet, 13)
+	local payload = buffer.create(buffer.len(packet) - 17)
+	buffer.copy(payload, 0, packet, 17)
 	local segment = {
 		conversation_id = buffer.readu32(packet, 0),
 		command =  buffer.readu8(packet, 4),
 		sequence_number = buffer.readu32(packet, 5),
-		timestamp = buffer.readu32(packet, 9),
+		timestamp = buffer.readf64(packet, 9),
 		payload = payload
 	}
 	return segment

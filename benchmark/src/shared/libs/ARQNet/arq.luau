@@ -56,7 +56,7 @@ Only modify if you understand the implications on network behavior.
 ]]
 
 local MAXIMUM_SEGMENT_SIZE = 800
-local RETRANSMISSION_TIMEOUT = 1.0 -- Seconds (Simple fixed RTO)
+local RETRANSMISSION_TIMEOUT = 1000 -- ms (Simple fixed RTO)
 
 
 
@@ -118,6 +118,10 @@ local function makeARQ(tx: (packet : Packet)->(), rx: (payload: Payload)->()) : 
 		tx_nxt_sn = 0,
 		rx_nxt_sn = 0,
 
+		rtt_variance = 0,
+		smoothed_rtt = 0,
+		rto = RETRANSMISSION_TIMEOUT,
+
 		tx = tx,
 		rx = rx,
 	}
@@ -158,67 +162,66 @@ local function recieve(arq: types.ARQStateMachine)
 end
 
 --[[
-
     The main transmission loop (Heartbeat).
-
-    1. Assigns sequence numbers to queued payloads.
-    2. Wraps payloads in segments and transmits them.
-    3. Manages the retransmission timer for in-flight packets.
-
-    Params:
-        arq: The ARQ state machine.
-
 ]]
+local MAX_RTO = types.MAX_RTO
 local function process_tx(arq: ARQStateMachine)
-	local now : ms = math.floor(workspace:GetServerTimeNow() * 1000)
-	local sequence_number = arq.tx_nxt_sn
-	for _, payload : Payload in ipairs(arq.tx_payload_queue) do
-		--[[
-		
-			1. Move from queue (Assign Sequence Numbers)
-		
-		]]
-		local segment : Segment = {
-			conversation_id = 0,
-			command = COMMAND_PUSH,
-			sequence_number = sequence_number,
-			timestamp = now,
-			payload = payload
-		}
-		--[[ 
-		
-			2. TX: Send new segments (Move to In-Flight)
-	    
-			In a real sliding window, we would check window size here before sending
-		
-		]]
-		local packet = encode_packet(segment)
+    local now = os.clock() 
+    local sequence_number = arq.tx_nxt_sn
+    
+    -- 1. PROCESS NEW PAYLOADS
+    for _, payload : Payload in ipairs(arq.tx_payload_queue) do
+       
+        local segment : Segment = {
+            conversation_id = 0,
+            command = COMMAND_PUSH,
+            sequence_number = sequence_number,
+            timestamp = now,
+            payload = payload, 
+        }
+
+        local packet = encode_packet(segment)
+        
         local inflight : InFlightPacket = {
             segment = segment,
             packet = packet,
             first_sent_time = now,
-            last_sent_time = now
+            last_sent_time = now,
+            retransmission_count = 0,
+            -- [CHANGE 3] Snapshot the current RTO for this specific packet.
+            -- We need a per-packet RTO so we can increase it if THIS packet fails,
+            -- without ruining the global RTO for new packets.
+            current_rto = arq.rto 
         }
+        
         arq.tx_inflight[sequence_number] = inflight
-		arq.tx(packet)
-		sequence_number += 1
-	end
-	arq.tx_nxt_sn = sequence_number
-	table.clear(arq.tx_payload_queue)
-	--[[
-	
-		3. Retransmission Logic (Check In-Flight Queue)
+        arq.tx(packet)
+        sequence_number += 1
+    end
     
-	]]
-	for _, inflight in arq.tx_inflight do
-        if now - inflight.last_sent_time > RETRANSMISSION_TIMEOUT then
-            -- Timeout detected! Resend.
+    arq.tx_nxt_sn = sequence_number
+    table.clear(arq.tx_payload_queue)
+
+    -- RETRANSMISSION LOGIC
+    for _, inflight in arq.tx_inflight do
+        if now - inflight.last_sent_time > inflight.current_rto then
+            
+            -- Timeout detected! 
+            
+            -- Update Stats for Karn's Algorithm
+            -- We increment this so calculate_rtt() will IGNORE the future ACK for this packet.
+            inflight.retransmission_count += 1
+            -- 1.5x Backoff Strategy
+            -- If it failed once, wait 1.5x longer next time.
+            -- (Standard TCP is 2x, but games need to be more aggressive)
+            inflight.current_rto = math.min(inflight.current_rto * 1.5, MAX_RTO)
+
+            -- Resend
             inflight.last_sent_time = now
             arq.tx(inflight.packet)
         end
     end
 end
-
 --[[
 
     Processes an incoming raw packet from the network.

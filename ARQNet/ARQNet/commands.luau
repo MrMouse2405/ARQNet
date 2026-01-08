@@ -93,10 +93,11 @@ Trigger:
 Semantics:
     - Window (wnd): The number of segments the receiver can currently accept.
 ]]
-local COMMAND_PUSH = 81
-local COMMAND_ACKNOWLEDGE = 82
-local COMMAND_WINDOW_PROBE = 83
-local COMMAND_WINDOW_SIZE = 84
+local COMMAND_PUSH = 0
+local COMMAND_ACKNOWLEDGE = 1
+local COMMAND_WINDOW_PROBE = 2
+local COMMAND_WINDOW_SIZE = 3
+local TOTAL_COMMANDS = 4
 
 local types = require('./types')
 local segment = require('./segment')
@@ -125,7 +126,7 @@ local function process_command_push(arq: types.ARQStateMachine, segment: types.S
         conversation_id = segment.conversation_id,
         command = COMMAND_ACKNOWLEDGE,
         sequence_number = segment.sequence_number,
-        timestamp = 0,
+        timestamp = segment.timestamp,
         payload = _empty_buffer
     }
     arq.tx(encode_packet(ack_seg))
@@ -148,6 +149,69 @@ end
 
 --[[
 
+    Calculates the Round Trip Time (RTT) and updates the Retransmission Timeout (RTO).
+
+    Implements the standard Jacobson/Karels algorithm (RFC 6298) to estimate
+    network conditions. It also applies Karn's Algorithm, which ignores RTT
+    samples from retransmitted segments to prevent skewed measurements.
+
+    Params:
+        arq: The ARQ state machine.
+        packet: The in-flight packet structure containing the segment and send times.
+
+]]
+type ms = number
+local INTERVAL : ms = 10 -- Granularity (approx 100hz tick)
+local MIN_RTO : ms = 50 -- KCP default: 30-50ms (don't go lower than ~3 frames)
+local MAX_RTO : ms = 5000 -- Fail fast cap
+@native
+local function calculate_rtt(arq: types.ARQStateMachine, packet: types.InFlightPacket)
+    -- Karn's Algorithm: Ignore RTT samples from retransmitted segments
+    -- We can't tell if this ACK is for the original or the retry.
+    if packet.retransmission_count > 0 then
+        return
+    end
+    local segment = packet.segment
+
+    -- Use os.clock() for high-precision local delta, then convert to ms
+    local now = os.clock() 
+    local rtt_seconds = now - segment.timestamp -- Use local timestamp
+    local rtt : ms = math.floor(rtt_seconds * 1000)
+
+    -- Sanity check for negative RTT (clock skew/reset edge cases)
+    if rtt < 0 then return end
+
+    local srtt = arq.smoothed_rtt
+    local rttvar = arq.rtt_variance
+
+    if srtt == 0 then
+        -- First measurement
+        srtt = rtt
+        rttvar = rtt / 2
+    else
+        -- Standard Jacobson/Karels (RFC 6298)
+        -- alpha = 1/8, beta = 1/4
+        local delta = rtt - srtt
+        srtt += delta / 8
+        rttvar += (math.abs(delta) - rttvar) / 4
+    end
+
+    -- KCP Optimization: Ensure variance doesn't decay to absolute zero
+    -- This keeps the RTO responsive if a sudden spike occurs after stability.
+    rttvar = math.max(1, rttvar)
+
+    arq.rtt_variance = rttvar
+    arq.smoothed_rtt = srtt
+
+    -- Calculate RTO: SRTT + 4 * RTTVAR
+    -- We ensure the variation component is at least INTERVAL to account for tick delays
+    local rto = srtt + math.max(INTERVAL, 4 * rttvar)
+    
+    arq.rto = math.clamp(rto, MIN_RTO, MAX_RTO)
+end
+
+--[[
+
     Processes a received ACK command.
 
     Removes the corresponding segment from the in-flight queue, stopping
@@ -159,7 +223,14 @@ end
 
 ]]
 local function process_command_acknowledge(arq: types.ARQStateMachine, segment: types.Segment)
-	arq.tx_inflight[segment.sequence_number] = nil	
+    local inflight = arq.tx_inflight[segment.sequence_number]
+    if inflight then
+        arq.tx_inflight[segment.sequence_number] = nil
+        -- Karn's Algorithm: Only update RTT if the packet was not retransmitted
+        if inflight.first_sent_time == inflight.last_sent_time then
+            calculate_rtt(arq, inflight)
+        end
+    end
 end
 --[[
 
@@ -208,4 +279,5 @@ return table.freeze {
     COMMAND_WINDOW_PROBE = COMMAND_WINDOW_PROBE,
     COMMAND_WINDOW_SIZE = COMMAND_WINDOW_SIZE,
 	COMMANDS_PROCESSORS = COMMANDS,
+    TOTAL_COMMANDS = TOTAL_COMMANDS,
 }

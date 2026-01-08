@@ -5,6 +5,9 @@
     "ReplicatedStorage": {
       "ARQNet": {
         "$path": "ARQNet/"
+      },
+      "Shared": {
+        "$path": "test/shared"
       }
     },
     "ServerScriptService": {

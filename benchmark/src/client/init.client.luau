@@ -14,14 +14,16 @@ local RedNetMode = require(Modes:WaitForChild('rednet'))
 local WarpMode = require(Modes:WaitForChild('warp'))
 local ZapMode = require(Modes:WaitForChild('zap'))
 local BlinkMode = require(Modes:WaitForChild('blink'))
+local ARQNetMode = require(Modes:WaitForChild('arqnet'))
 
 local MODES = {
+	{ Name = "ARQNet", Module = ARQNetMode },
 	{ Name = "Roblox", Module = RobloxMode },
 	{ Name = "ByteNet", Module = ByteNetMode },
 	{ Name = "RedNet", Module = RedNetMode },
 	{ Name = "Warp", Module = WarpMode },
 	{ Name = "Zap", Module = ZapMode },
-	{ Name = "Blink", Module = BlinkMode}
+	{ Name = "Blink", Module = BlinkMode},
 }
 
 -- Setup Environment
@@ -52,8 +54,8 @@ ListLayout.Padding = UDim.new(0, 10)
 ListLayout.Parent = ScrollFrame
 
 local BATCH_SIZES = {}
-for i = 10, 100, 10 do
-	table.insert(BATCH_SIZES, i)
+for i = 1, 10, 2.5 do
+	table.insert(BATCH_SIZES, i * 100)
 end
 
 local function updateXLabels(Frame, labels)
@@ -114,17 +116,19 @@ task.spawn(function()
 	for _, dataModule in ipairs(datasets) do
 		local dataName = dataModule.Name
 		local generator = require(dataModule)
-		
+
+		local bandwidthGraphFrame3, bandwidthXAxis3 = createGraphContainer(dataName .. " - Bandwidth (Roblox/RedNet) (KBps)")
+		local bandwidthGraph3 = GraphModule.new(bandwidthGraphFrame3)
+
 		local bandwidthGraphFrame, bandwidthXAxis = createGraphContainer(dataName .. " - Bandwidth (KBps)")
 		local bandwidthGraph = GraphModule.new(bandwidthGraphFrame)
-		-- bandwidthGraph.BaselineZero = true
 
 		local bandwidthGraphFrame2, bandwidthXAxis2 = createGraphContainer(dataName .. " - Bandwidth (Zap/Blink) (KBps)")
 		local bandwidthGraph2 = GraphModule.new(bandwidthGraphFrame2)		
 
+
 		local fpsGraphFrame, fpsXAxis = createGraphContainer(dataName .. " - FPS (Hz)")
 		local fpsGraph = GraphModule.new(fpsGraphFrame)
-		fpsGraph.BaselineZero = true
         
 		local results = {}
 		for _, mode in ipairs(MODES) do
@@ -146,11 +150,13 @@ task.spawn(function()
 			end
 			
 			-- Update graph live
-			local bandwidthData, bandwidthData2, fpsData = {}, {}, {}
+			local bandwidthData, bandwidthData2, bandwidthData3, fpsData = {}, {}, {}, {}
 			for name, data in pairs(results) do
 				if #data.Bandwidth > 0 then
-					if name == "Roblox" or name == "RedNet" or name == 'Warp' then
+					if name == 'Warp' or name =='ARQNet' or name == 'ByteNet' then
 						bandwidthData[name] = data.Bandwidth
+					elseif name == "Roblox" or name == "RedNet" then
+						bandwidthData3[name] = data.Bandwidth
 					else
 						bandwidthData2[name] = data.Bandwidth
 					end
@@ -160,9 +166,11 @@ task.spawn(function()
 			
 			bandwidthGraph.Data = bandwidthData
 			bandwidthGraph2.Data = bandwidthData2
+			bandwidthGraph3.Data = bandwidthData3
 			fpsGraph.Data = fpsData
 			updateXLabels(bandwidthXAxis, currentLabels)
 			updateXLabels(bandwidthXAxis2, currentLabels)
+			updateXLabels(bandwidthXAxis3, currentLabels)
 			updateXLabels(fpsXAxis, currentLabels)
 
 			task.wait()
