@@ -8,8 +8,6 @@ Test:rx(function(message: string)
     print(`Server sent {message}`)
 end)
 
-
-
 while task.wait(1) do 
     Test:tx("Hello from Client!")
     Random:tx(math.random(-10,0),math.random(0,10))

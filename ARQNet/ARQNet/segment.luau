@@ -57,48 +57,73 @@ export type ms = number
 export type Command = number
 type List<T> = {T}
 
-export type Segment  = {
-	conversation_id: uint32,
-	command : Command,
-	sequence_number: uint32,
-	timestamp: ms,
-	payload: Payload
-}
+local signature = require('./signature')
+local types = require('./types')
+local COMMAND_PUSH = types.COMMAND_PUSH
+local COMMAND_ACKNOWLEDGE = types.COMMAND_ACKNOWLEDGE
+local SIGN = signature.sign
+local SIGNATURE_OFFSET = signature.size()
+local HEADER_OFFSET = SIGNATURE_OFFSET + 4
+-- header = signature + sequence number
+
+@native
+local function encodeSegmentPush(conversation_id : number, sequence_number : number, payload : buffer) : Packet
+	local b = buffer.create(HEADER_OFFSET + buffer.len(payload))
+	SIGN(conversation_id, COMMAND_PUSH, b)
+	buffer.writeu32(b,SIGNATURE_OFFSET,sequence_number)
+	buffer.copy(b, HEADER_OFFSET, payload)
+	return b
+end
+
+--[[
+
+	Returns Sequence Number and Payload
+	from decoded Push Packet
+
+]]
+@native
+local function decodeSegmentPush(packet: Packet)
+	local sequence_number = buffer.readu32(packet, SIGNATURE_OFFSET)
+	local payload = buffer.create(buffer.len(packet) - HEADER_OFFSET)
+	buffer.copy(payload, 0, packet, HEADER_OFFSET)
+	return sequence_number, payload
+end
+
+
+@native
+local function encodeSegmentAcknowledge(conversation_id: number, sequence_number : number) : Packet
+	local b = buffer.create(8)
+	SIGN(conversation_id,COMMAND_ACKNOWLEDGE,b)
+	buffer.writeu32(b, SIGNATURE_OFFSET, sequence_number)
+	return b
+end
+
+
+--[[
+
+	Returns sequence number from decoded Acknowledge Packet
+
+]]
+@native
+local function decodeSegmentAcknowledge(packet : Packet) : number
+	local sequence_number = buffer.readu32(packet, SIGNATURE_OFFSET)
+	return sequence_number
+end
+
+
+
 
 export type InFlightPacket = {
-    segment: Segment,
     packet: Packet,
+	sequence_number: number,
     first_sent_time: number,
     last_sent_time: number
 }
 
-
-@native 
-local function encode_packet(segment: Segment) : Packet
-	local b = buffer.create(4 + 1 + 4 + 8 + buffer.len(segment.payload))
-	buffer.writeu32(b, 0, segment.conversation_id)
-	buffer.writeu8(b, 4, segment.command)
-	buffer.writeu32(b, 5, segment.sequence_number)
-	buffer.writef64(b, 9, segment.timestamp)
-	buffer.copy(b, 17, segment.payload)
-	return b
-end
-
-@native 
-local function decode_packet(packet : Packet) : Segment
-	local payload = buffer.create(buffer.len(packet) - 17)
-	buffer.copy(payload, 0, packet, 17)
-	local segment = {
-		conversation_id = buffer.readu32(packet, 0),
-		command =  buffer.readu8(packet, 4),
-		sequence_number = buffer.readu32(packet, 5),
-		timestamp = buffer.readf64(packet, 9),
-		payload = payload
-	}
-	return segment
-end
-
 return {
-	encode_packet = encode_packet, 
-	decode_packet = decode_packet
+	encodeSegmentAcknowledge = encodeSegmentAcknowledge,
+	decodeSegmentAcknowledge = decodeSegmentAcknowledge,
+	
+	encodeSegmentPush = encodeSegmentPush,
+	decodeSegmentPush = decodeSegmentPush,
 }

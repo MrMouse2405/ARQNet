@@ -1,5 +1,4 @@
 local ARQNet = require(game:GetService('ReplicatedStorage'):WaitForChild('ARQNet'))
-ARQNet.init()
 
 local Test : ARQNet.Event<string> = ARQNet.event(
     'Test',

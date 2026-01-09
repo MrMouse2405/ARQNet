@@ -58,8 +58,6 @@ Only modify if you understand the implications on network behavior.
 local MAXIMUM_SEGMENT_SIZE = 800
 local RETRANSMISSION_TIMEOUT = 1000 -- ms (Simple fixed RTO)
 
-
-
 --[[
 ================================================================================
                                 Implementation
@@ -69,31 +67,19 @@ local types = require('./types')
 type ARQStateMachine = types.ARQStateMachine
 type Packet = types.Packet
 type Payload = types.Payload
-type Segment = types.Segment
 type InFlightPacket = types.InFlightPacket
-type CommandFun = (arq: ARQStateMachine, segment: Segment)->()
+type CommandFun = (arq: ARQStateMachine, id: number, packet: Packet)->()
 type ms = types.ms
 
-local COMMAND_PUSH : number
-local COMMAND_ACKNOWLEDGE : number
-local COMMAND_WINDOW_PROBE : number
-local COMMAND_WINDOW_SIZE : number
-local COMMAND_PROCESSORS : {[number] : CommandFun}
-do
-	local Commmands = require('./commands')
-	COMMAND_PUSH = Commmands.COMMAND_PUSH
-	COMMAND_ACKNOWLEDGE = Commmands.COMMAND_ACKNOWLEDGE
-	COMMAND_WINDOW_PROBE = Commmands.COMMAND_WINDOW_PROBE
-	COMMAND_WINDOW_SIZE = Commmands.COMMAND_WINDOW_SIZE
-    COMMANDS_PROCESSORS = Commmands.COMMANDS_PROCESSORS
-end
+
+local COMMANDS_PROCESSORS : {[number] : CommandFun} = require('./commands').COMMANDS_PROCESSORS
 
 
 local segment = require('./segment')
 local signature = require('./signature')
-local encode_packet = segment.encode_packet
-local decode_packet = segment.decode_packet
-local sign = signature.sign
+local breakdown = signature.breakdown
+local encodeSegmentPush = segment.encodeSegmentPush
+local encodeSegmentAcknowledge = segment.encodeSegmentAcknowledge
 
 
 --[[
@@ -110,10 +96,9 @@ local sign = signature.sign
 ]]
 local function makeARQ(tx: (packet : Packet)->(), rx: (id: number, payload: Payload)->()) : ARQStateMachine 
 	return {
-		tx_payload_queue = {},
+		tx_push_queue = {},
 		tx_inflight = {},
 
-		rx_segment_queue = {},
 		rx_out_of_order = {},
 
 		tx_nxt_sn = 0,
@@ -140,26 +125,20 @@ end
         payload: The raw data buffer to send.
 
 ]]
-local function transmit(arq : types.ARQStateMachine, id: string, payload: types.Payload)
-	table.insert(arq.tx_payload_queue,{id=id,payload=payload})
-end
-
---[[
-
-    Delivers ordered, reassembled payloads to the application.
-
-    Iterates through the receive queue and calls the rx callback for each
-    ready segment, then clears the queue.
-
-    Params:
-        arq: The ARQ state machine.
-
-]]
-local function recieve(arq: types.ARQStateMachine)
-	for _,segment : Segment in ipairs(arq.rx_segment_queue) do
-		arq.rx(segment.conversation_id,segment.payload)
-	end
-	table.clear(arq.rx_segment_queue)
+local function transmit(arq : types.ARQStateMachine, id: number, payload: types.Payload)
+    local packet : InFlightPacket = {
+        packet = encodeSegmentPush(id, arq.tx_nxt_sn, payload),
+        sequence_number = arq.tx_nxt_sn,
+        first_sent_time = 0,
+        last_sent_time = 0,
+        current_rto = 0,
+        retransmission_count = 0
+    }
+    table.insert(
+        arq.tx_push_queue,
+        packet
+    )
+    arq.tx_nxt_sn += 1
 end
 
 --[[
@@ -168,49 +147,25 @@ end
 local MAX_RTO = types.MAX_RTO
 local function process_tx(arq: ARQStateMachine)
     local now = os.clock() 
-    local sequence_number = arq.tx_nxt_sn
-    
     -- 1. PROCESS NEW PAYLOADS
-    for _, awaiting : {id: number, payload: Payload} in ipairs(arq.tx_payload_queue) do       
-        local segment : Segment = {
-            conversation_id = awaiting.id,
-            command = COMMAND_PUSH,
-            sequence_number = sequence_number,
-            timestamp = now,
-            payload = awaiting.payload, 
-        }
-
-        local packet = encode_packet(segment)
-        local inflight : InFlightPacket = {
-            segment = segment,
-            packet = packet,
-            first_sent_time = now,
-            last_sent_time = now,
-            retransmission_count = 0,
-            current_rto = arq.rto 
-        }        
-        arq.tx_inflight[sequence_number] = inflight
-        arq.tx(packet)
-        sequence_number += 1
+    for _, awaiting : InFlightPacket in arq.tx_push_queue do
+        awaiting.first_sent_time = now
+        awaiting.last_sent_time = now
+        awaiting.current_rto = arq.rto
+        arq.tx_inflight[awaiting.sequence_number] = awaiting
+        arq.tx(awaiting.packet)
     end
-    
-    arq.tx_nxt_sn = sequence_number
-    table.clear(arq.tx_payload_queue)
+    table.clear(arq.tx_push_queue)
 
     -- RETRANSMISSION LOGIC
     for _, inflight in arq.tx_inflight do
         if now - inflight.last_sent_time > inflight.current_rto then
-            
             -- Timeout detected! 
-            
-            -- Update Stats for Karn's Algorithm
-            -- We increment this so calculate_rtt() will IGNORE the future ACK for this packet.
             inflight.retransmission_count += 1
             -- 1.5x Backoff Strategy
             -- If it failed once, wait 1.5x longer next time.
             -- (Standard TCP is 2x, but games need to be more aggressive)
             inflight.current_rto = math.min(inflight.current_rto * 1.5, MAX_RTO)
-
             -- Resend
             inflight.last_sent_time = now
             arq.tx(inflight.packet)
@@ -230,10 +185,10 @@ end
 
 ]]
 local function process_rx(arq: ARQStateMachine, packet: Packet)
-	local segment: Segment = decode_packet(packet)
-	local command: CommandFun? = COMMANDS_PROCESSORS[segment.command]
-	if command then
-		command(arq, segment)
+	local id, command = breakdown(packet)
+	local command_fun: CommandFun? = COMMANDS_PROCESSORS[command]
+	if command_fun then
+		command_fun(arq, id, packet)
 	else
 		warn('[ARQNET CRITICAL ERROR] MALFORMED PACKET! SKIPPED!')
 	end
@@ -252,12 +207,11 @@ type ARQPrivate = types.ARQStateMachine & ARQ;
 
 local ARQ = {}
 ARQ.__index = ARQ
-
+   
 function ARQ.makeARQ(tx: (packet : Packet)->(), rx: (id: number, payload: Payload)->())
     return setmetatable(makeARQ(tx, rx), ARQ)
 end
 ARQ.transmit = transmit
-ARQ.recieve = recieve
 ARQ.process_tx = process_tx
 ARQ.process_rx = process_rx
 function ARQ.getSRTT(self: types.ARQStateMachine):ms

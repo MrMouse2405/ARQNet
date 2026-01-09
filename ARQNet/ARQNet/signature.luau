@@ -85,40 +85,22 @@ __/        \__/        \__/        \__/        \__/        \__/
     big game. However, they still have the option to have
     more events with slightly more bandwidth.
     
+    Wait no, the implementation will be too complex
+    if we let programmers decide. We will just use
+    2 bytes instead of 1 byte for id. 2 bytes allows us
+    16K events. Which, let's be honest, should be sufficient
+    for a roblox game.
+
+    If they have somehow go above ~16K, or, to be more specific,
+    above (2^16)/4, skill issue.
 
 ]]
 local types = require('./types')
-local commands = require('./commands')
-local TOTAL_COMMANDS = commands.TOTAL_COMMANDS
+local TOTAL_COMMANDS = types.TOTAL_COMMANDS
 
-local modes = table.freeze{
-    E64 = (2^8)/TOTAL_COMMANDS, --u8
-    E16K = (2^16)/TOTAL_COMMANDS, --u16
-    E1B = (2^32)/TOTAL_COMMANDS, --u32
-}
+local MAX_EVENTS = (2^16)/TOTAL_COMMANDS --u16
+local SIGNATURE_OFFSET = 2 --bytes
 
-export type ExecutionModes = 'E64' | 'E16K' | 'E1B'
-local mode_keys = {
-    E64 = 'E64',
-    E16K = 'E16K',
-    E1B = 'E1B'
-}
-
-local sign_modes = table.freeze{
-    [modes.E64] = buffer.writeu8,
-    [modes.E16K] = buffer.writeu16,
-    [modes.E1B] = buffer.writeu32
-}
-
-local breakdown_modes = table.freeze{
-    [modes.E64] = buffer.readu8,
-    [modes.E16K] = buffer.readu16,
-    [modes.E1B] = buffer.readu32,
-}
-
-local DEFAULT_MODE = modes.E64
-local SIGN_MODE = sign_modes[DEFAULT_MODE]
-local BREAKDOWN_MODE = breakdown_modes[DEFAULT_MODE]
 
 --[[
 
@@ -153,7 +135,9 @@ local Signature = {}
 function Signature.make(name : string) -- signal : signal.Signal<buffer> | signal.Signal<Player,buffer>, ID : number
     if RunService:IsServer() then
         assert(not name_to_id[name],`[ARQNET ERROR 0]{name} is already defined!`)
-        assert(ID_COUNT + 1 < DEFAULT_MODE,'[ARQNET ERR0R 1] Current mode cannot handle any more new events!')
+        assert(
+            ID_COUNT + 1 < MAX_EVENTS,
+            `[ARQNET ERR0R 1] Current mode cannot handle any more new events! How did u manage to get more than 16k events?`)
         local sig = signal.new()
         name_to_id[name] = ID_COUNT
         id_to_signal[ID_COUNT] = sig 
@@ -178,38 +162,40 @@ function Signature.make(name : string) -- signal : signal.Signal<buffer> | signa
     end
 end
 
-function Signature.sign(name: string, command: number, buf: buffer)
-    SIGN_MODE(buf, 0, name_to_id[name] * TOTAL_COMMANDS + command)
+function Signature.sign(id: number, command: number, buf: buffer)
+    buffer.writeu16(buf, 0, id * TOTAL_COMMANDS + command)
 end
 
 function Signature.breakdown(buf: buffer)
-    local signature = BREAKDOWN_MODE(buf, 0)
+    local signature = buffer.readu16(buf, 0)
     local command = signature % TOTAL_COMMANDS
-    local id = signature - command
+    local id = (signature - command) / TOTAL_COMMANDS
     return id, command
 end
 
-function Signature.get_event(id : number) :  signal.Signal<Player, buffer> | signal.Signal<buffer>
-    return id_to_signal[id]
-end
-
-function Signature.size() : number
-    if DEFAULT_MODE == modes.E64 then
-        return 1
-    elseif DEFAULT_MODE == modes.E16K then
-        return 2
+function Signature.get_event(id : number) :  signal.Signal<Player, buffer> | signal.Signal<buffer> | nil
+    local sig = id_to_signal[id]
+    if sig then
+        return sig
+    end
+    if RunService:IsClient() then
+        local start = os.clock()
+        while os.clock() - start < 3 do
+            if id_to_signal[id] then
+                return id_to_signal[id]
+            end
+            task.wait()
+        end
+        warn('[ARQNet] Server fired an unknown / unregistered event!')
+        return nil
     else
-        return 4   
+        warn('[ARQNet] Client fired an unknown / malformed packet!')
+        return nil
     end
 end
 
-Signature.Modes = modes
-Signature.ModeKeys = mode_keys
-function Signature.SetMode(mode : ExecutionModes)
-    assert(modes[mode],`{mode} is not a valid mode!`)
-    DEFAULT_MODE = mode
-    SIGN_MODE = sign_modes[mode]
-    BREAKDOWN_MODE = sign_modes[mode]
+function Signature.size() : number
+    return SIGNATURE_OFFSET
 end
 
 
@@ -240,9 +226,5 @@ else
         return nil
     end
 end
-
-
-
-
 
 return Signature
